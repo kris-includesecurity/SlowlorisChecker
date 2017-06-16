@@ -26,7 +26,7 @@
 require 'socket'
 require 'base64'
 require 'optparse'
-# require 'openssl'
+require 'openssl'
 
 $version = "1.0"
 $author = "Felipe Molina"
@@ -77,11 +77,16 @@ def time
   Time.now - start
 end
 
-def createSocket(ssl)
+def createSocket(host, port, ssl)
+    socket = TCPSocket.new(host, port)
     if ssl
-        OpenSSL::SSL::VERIFY_NONE
-    else
-
+        ctx = OpenSSL::SSL::SSLContext.new
+        ctx.set_params(verify_mode: OpenSSL::SSL::VERIFY_NONE)
+        sslsocket = OpenSSL::SSL::SSLSocket.new(socket, ctx).tap do |s|
+            s.sync_close = true
+            s.connect
+        end
+        socket = sslsocket
     end
     socket
 end
@@ -175,26 +180,11 @@ puts "========================================="
 auth_header="Authentication: Basic #{options[:auth]}\r\n" if options[:auth].size > 0
 
 # Detecting slowloris
-slow_headers_1=%w(
-GET / HTTP/1.1
-Host: #{options[:hostname]}
-#{auth_header}User-Agent:#{options[:useragent]}
-Connection: keep-alive
-)
-slow_headers_2="X-wait-for-me: Thank you"
+slow_headers_1="GET / HTTP/1.1\r\nHost: #{options[:hostname]}\r\n#{auth_header}User-Agent:#{options[:useragent]}\r\nConnection: keep-alive\r\n"
+slow_headers_2="X-wait-for-me: Thank you\r\n"
 
 # Detecting slow POST
-slow_post_1=%w(
-POST #{options[:posturl]} HTTP/1.1
-Host: #{options[:hostname]}
-#{auth_header}User-Agent:#{options[:useragent]}
-Connection: keep-alive
-Keep-Alive: 300
-Content-Type: application/x-www-form-urlencoded
-Content-Length: 512
-Accept: text/html;q=0.9,text/plain;q=0.8,image/png,*/*;q=0.5
-
-mgs=msg1&)
+slow_post_1="POST #{options[:posturl]} HTTP/1.1\r\nHost: #{options[:hostname]}\r\n#{auth_header}User-Agent:#{options[:useragent]}\r\nConnection: keep-alive\r\nKeep-Alive: 300\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 512\r\nAccept: text/html;q=0.9,text/plain;q=0.8,image/png,*/*;q=0.5\r\n\r\nmgs=msg1&"
 slow_post_2="more_msg=more&"
 
 # ==============================
@@ -213,9 +203,9 @@ for thread in threads
             # Control thread
             t_control_head = time do
                     begin
-                        s_control = TCPSocket.new(options[:hostname],options[:port])
-                        s_control.write(slow_headers_1)
-                        response = s_control.recv(1024) # Running until timeout (408?)
+                        s_control = createSocket(options[:hostname],options[:port],options[:ssl])
+                        s_control.syswrite(slow_headers_1)
+                        response = s_control.sysread(1024) # Running until timeout (408?)
                     rescue Errno::ECONNREFUSED
                         $stderr.puts "Error. Conexion refused. Check if hostname #{options[:hostname]} and port #{options[:port]} is correct"
                         exit
@@ -227,11 +217,11 @@ for thread in threads
             # Delay thread
             t_delay_head = time do
                     begin
-                        s_delay = TCPSocket.new(options[:hostname],options[:port])
-                        s_delay.write(slow_headers_1)
+                        s_delay = createSocket(options[:hostname],options[:port],options[:ssl])
+                        s_delay.syswrite(slow_headers_1)
                         sleep(options[:delay])
-                        s_delay.print(slow_headers_2)
-                        response = s_delay.recv(1024)
+                        s_delay.syswrite(slow_headers_2)
+                        response = s_delay.sysread(1024)
                     rescue Errno::ECONNREFUSED
                         $stderr.puts "Error. Conexion refused. Check if hostname #{options[:hostname]} and port #{options[:port]} is correct"
                         exit
@@ -270,9 +260,9 @@ for thread in threads
             # Control thread
             t_control_post = time do
                     begin
-                        s_control = TCPSocket.new(options[:hostname],options[:port])
-                        s_control.write(slow_post_1)
-                        s_control.recv(1024) # Running until timeout (504?)
+                        s_control = createSocket(options[:hostname],options[:port],options[:ssl])
+                        s_control.syswrite(slow_post_1)
+                        s_control.sysread(1024) # Running until timeout (504?)
                     rescue Errno::ECONNREFUSED
                         $stderr.puts "Error. Conexion refused. Check if hostname #{options[:hostname]} and port #{options[:port]} is correct"
                         exit
@@ -284,11 +274,11 @@ for thread in threads
             # Delay thread
             t_delay_post = time do
                     begin
-                        s_delay = TCPSocket.new(options[:hostname],options[:port])
-                        s_delay.write(slow_post_1)
+                        s_delay = createSocket(options[:hostname],options[:port],options[:ssl])
+                        s_delay.syswrite(slow_post_1)
                         sleep(options[:delay])
-                        s_delay.print(slow_post_2)
-                        s_delay.recv(1024)
+                        s_delay.syswrite(slow_post_2)
+                        s_delay.sysread(1024)
                     rescue Errno::ECONNREFUSED
                         $stderr.puts "Error. Conexion refused. Check if hostname #{options[:hostname]} and port #{options[:port]} is correct"
                         exit
